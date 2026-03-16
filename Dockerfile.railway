@@ -1,0 +1,144 @@
+# syntax=docker/dockerfile:1.7
+
+# Railway-specific Dockerfile.
+# Keep this in sync with the root Dockerfile, but avoid BuildKit cache mounts:
+# Railway requires service-scoped cache IDs for --mount=type=cache, and those
+# IDs cannot be committed portably for every deployment target.
+
+# ── Stage 1: Build ────────────────────────────────────────────
+FROM rust:1.93-slim@sha256:9663b80a1621253d30b146454f903de48f0af925c967be48c84745537cd35d8b AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy build-relevant files directly.
+# Railway's Docker builder has been unreliable with the manifest-only workspace
+# warmup path because some member crates are not parseable without their source
+# tree present, so favor a simpler full-source build here.
+COPY Cargo.toml Cargo.lock ./
+COPY src/ src/
+COPY benches/ benches/
+COPY crates/ crates/
+COPY firmware/ firmware/
+COPY web/ web/
+# Keep release builds resilient when frontend dist assets are not prebuilt in Git.
+RUN mkdir -p web/dist && \
+    if [ ! -f web/dist/index.html ]; then \
+      printf '%s\n' \
+        '<!doctype html>' \
+        '<html lang="en">' \
+        '  <head>' \
+        '    <meta charset="utf-8" />' \
+        '    <meta name="viewport" content="width=device-width,initial-scale=1" />' \
+        '    <title>ZeroClaw Dashboard</title>' \
+        '  </head>' \
+        '  <body>' \
+        '    <h1>ZeroClaw Dashboard Unavailable</h1>' \
+        '    <p>Frontend assets are not bundled in this build. Build the web UI to populate <code>web/dist</code>.</p>' \
+        '  </body>' \
+        '</html>' > web/dist/index.html; \
+    fi
+RUN cargo build --release --locked --bin zeroclaw && \
+    ls -lh target/release/zeroclaw && \
+    cp target/release/zeroclaw /app/zeroclaw && \
+    strip /app/zeroclaw && \
+    ls -lh /app/zeroclaw
+
+# Prepare runtime directory structure and default config inline (no extra stage)
+RUN mkdir -p /zeroclaw-data/.zeroclaw /zeroclaw-data/workspace && \
+    printf '%s\n' \
+        'workspace_dir = "/zeroclaw-data/workspace"' \
+        'config_path = "/zeroclaw-data/.zeroclaw/config.toml"' \
+        'api_key = ""' \
+        'default_provider = "openrouter"' \
+        'default_model = "anthropic/claude-sonnet-4-20250514"' \
+        'default_temperature = 0.7' \
+        '' \
+        '[gateway]' \
+        'port = 42617' \
+        'host = "[::]"' \
+        'allow_public_bind = true' \
+        > /zeroclaw-data/.zeroclaw/config.toml && \
+    chown -R 65534:65534 /zeroclaw-data
+
+# ── Stage 2: Development Runtime (Debian) ────────────────────
+FROM debian:trixie-slim@sha256:f6e2cfac5cf956ea044b4bd75e6397b4372ad88fe00908045e9a0d21712ae3ba AS dev
+
+# Install essential runtime dependencies only (use docker-compose.override.yml for dev tools)
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /zeroclaw-data /zeroclaw-data
+COPY --from=builder /app/zeroclaw /usr/local/bin/zeroclaw
+
+# Overwrite minimal config with DEV template (Ollama defaults)
+COPY dev/config.template.toml /zeroclaw-data/.zeroclaw/config.toml
+RUN chown 65534:65534 /zeroclaw-data/.zeroclaw/config.toml
+
+# Environment setup
+# Ensure UTF-8 locale so CJK / multibyte input is handled correctly
+ENV LANG=C.UTF-8
+# Use consistent workspace path
+ENV ZEROCLAW_WORKSPACE=/zeroclaw-data/workspace
+ENV HOME=/zeroclaw-data
+# Defaults for local dev (Ollama) - matches config.template.toml
+ENV PROVIDER="ollama"
+ENV ZEROCLAW_MODEL="llama3.2"
+ENV ZEROCLAW_GATEWAY_PORT=42617
+
+# Note: API_KEY is intentionally NOT set here to avoid confusion.
+# It is set in config.toml as the Ollama URL.
+
+WORKDIR /zeroclaw-data
+USER 65534:65534
+EXPOSE 42617
+ENTRYPOINT ["/usr/local/bin/zeroclaw"]
+CMD ["daemon"]
+
+# ── Stage 3: Railway Runtime (Debian) ────────────────────────
+# Railway-specific runtime keeps a shell and standard userspace available
+# so SSH works and early startup failures are observable in logs.
+FROM debian:trixie-slim@sha256:f6e2cfac5cf956ea044b4bd75e6397b4372ad88fe00908045e9a0d21712ae3ba AS release
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/zeroclaw /usr/local/bin/zeroclaw
+COPY --from=builder /zeroclaw-data /zeroclaw-data
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'echo "[railway-entrypoint] uid=$(id -u) gid=$(id -g) pwd=$(pwd)" >&2' \
+    'echo "[railway-entrypoint] PORT=${PORT-} ZEROCLAW_GATEWAY_PORT=${ZEROCLAW_GATEWAY_PORT-} ZEROCLAW_GATEWAY_HOST=${ZEROCLAW_GATEWAY_HOST-} HOME=${HOME-}" >&2' \
+    'ls -l /usr/local/bin/zeroclaw >&2 || true' \
+    'exec /usr/local/bin/zeroclaw "$@"' \
+    > /usr/local/bin/railway-entrypoint.sh \
+    && chmod +x /usr/local/bin/railway-entrypoint.sh
+
+# Environment setup
+# Ensure UTF-8 locale so CJK / multibyte input is handled correctly
+ENV LANG=C.UTF-8
+ENV ZEROCLAW_WORKSPACE=/zeroclaw-data/workspace
+ENV HOME=/zeroclaw-data
+# Railway routes traffic to the container's PORT, so do not pin the gateway
+# port here; let runtime env overrides use PORT. Force an IPv4 public bind.
+ENV ZEROCLAW_GATEWAY_HOST=0.0.0.0
+# Default provider and model are set in config.toml, not here,
+# so config file edits are not silently overridden
+#ENV PROVIDER=
+
+# API_KEY must be provided at runtime!
+
+WORKDIR /zeroclaw-data
+USER 65534:65534
+EXPOSE 42617
+ENTRYPOINT ["/usr/local/bin/railway-entrypoint.sh"]
+CMD ["daemon"]

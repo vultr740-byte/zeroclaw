@@ -22,6 +22,19 @@ For resilient fallback chains (`reliability.fallback_providers`), each fallback
 provider resolves credentials independently. The primary provider's explicit
 credential is not reused for fallback providers.
 
+Recommended deployment convention for OpenAI-compatible/containerized setups:
+
+```bash
+ZEROCLAW_PROVIDER=openai
+ZEROCLAW_MODEL=gpt-5.4
+ZEROCLAW_API_URL=https://example.com/v1
+ZEROCLAW_API_KEY=sk-...
+```
+
+This keeps deployment-only overrides under one `ZEROCLAW_*` namespace.
+Provider-specific vars such as `OPENAI_API_KEY` remain supported for existing
+setups.
+
 ## Provider Catalog
 
 | Canonical ID | Aliases | Local | Provider-specific env var(s) |

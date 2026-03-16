@@ -72,6 +72,19 @@ Operational note for container users:
 - If your `config.toml` sets an explicit custom provider like `custom:https://.../v1`, a default `PROVIDER=openrouter` from Docker/container env will no longer replace it.
 - Use `ZEROCLAW_PROVIDER` when you intentionally want runtime env to override a non-default configured provider.
 
+Recommended convention for OpenAI-compatible/container deployments:
+
+```bash
+ZEROCLAW_PROVIDER=openai
+ZEROCLAW_MODEL=gpt-5.4
+ZEROCLAW_API_URL=https://example.com/v1
+ZEROCLAW_API_KEY=sk-...
+```
+
+Use this when you want provider, model, base URL, and credential overrides to
+stay under one deployment-specific namespace without changing older
+provider-specific env usage.
+
 ## `[agent]`
 
 | Key | Default | Purpose |

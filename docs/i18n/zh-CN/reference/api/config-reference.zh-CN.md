@@ -72,6 +72,18 @@ runtime_trace_max_entries = 200
 - 如果你的 `config.toml` 设置了显式自定义提供商，如 `custom:https://.../v1`，则 Docker/容器环境中的默认 `PROVIDER=openrouter` 将不再替换它。
 - 当你有意让运行时环境覆盖非默认配置的提供商时，请使用 `ZEROCLAW_PROVIDER`。
 
+对于 OpenAI 兼容的容器部署，推荐使用下面这组统一命名：
+
+```bash
+ZEROCLAW_PROVIDER=openai
+ZEROCLAW_MODEL=gpt-5.4
+ZEROCLAW_API_URL=https://example.com/v1
+ZEROCLAW_API_KEY=sk-...
+```
+
+这样可以把 provider、model、base URL 和 credential 的部署覆盖统一放在
+一组 `ZEROCLAW_*` 变量里，同时不影响旧的 provider 专用环境变量用法。
+
 ## `[agent]`
 
 | 键 | 默认值 | 用途 |

@@ -61,6 +61,19 @@ Lưu ý cho người dùng container:
 - Nếu `config.toml` đặt provider tùy chỉnh như `custom:https://.../v1`, biến `PROVIDER=openrouter` mặc định từ Docker/container sẽ không thay thế nó.
 - Dùng `ZEROCLAW_PROVIDER` khi cố ý muốn biến môi trường ghi đè provider đã cấu hình.
 
+Quy ước khuyến nghị cho triển khai OpenAI-compatible/container:
+
+```bash
+ZEROCLAW_PROVIDER=openai
+ZEROCLAW_MODEL=gpt-5.4
+ZEROCLAW_API_URL=https://example.com/v1
+ZEROCLAW_API_KEY=sk-...
+```
+
+Dùng cách này khi bạn muốn provider, model, base URL và credential override đều
+nằm trong một namespace triển khai duy nhất mà không làm thay đổi cách dùng các
+biến env cũ theo từng provider.
+
 ## `[agent]`
 
 | Khóa | Mặc định | Mục đích |

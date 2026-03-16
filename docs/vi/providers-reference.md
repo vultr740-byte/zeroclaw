@@ -20,6 +20,19 @@ Thứ tự ưu tiên tại runtime:
 
 Với chuỗi provider dự phòng (`reliability.fallback_providers`), mỗi provider dự phòng tự giải quyết thông tin xác thực của mình độc lập. Key xác thực của provider chính không tự động dùng cho provider dự phòng.
 
+Quy ước khuyến nghị cho triển khai OpenAI-compatible/container:
+
+```bash
+ZEROCLAW_PROVIDER=openai
+ZEROCLAW_MODEL=gpt-5.4
+ZEROCLAW_API_URL=https://example.com/v1
+ZEROCLAW_API_KEY=sk-...
+```
+
+Cách này giữ toàn bộ phần override khi triển khai trong cùng namespace
+`ZEROCLAW_*`. Các biến dành riêng cho provider như `OPENAI_API_KEY` vẫn được giữ
+cho các môi trường cũ.
+
 ## Danh mục Provider
 
 | Canonical ID | Alias | Cục bộ | Biến môi trường dành riêng |

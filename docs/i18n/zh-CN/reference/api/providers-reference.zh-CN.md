@@ -20,6 +20,18 @@ zeroclaw providers
 
 对于弹性回退链（`reliability.fallback_providers`），每个回退提供商独立解析凭证。主提供商的显式凭证不会重用于回退提供商。
 
+对于 OpenAI 兼容/容器化部署，推荐统一使用以下环境变量约定：
+
+```bash
+ZEROCLAW_PROVIDER=openai
+ZEROCLAW_MODEL=gpt-5.4
+ZEROCLAW_API_URL=https://example.com/v1
+ZEROCLAW_API_KEY=sk-...
+```
+
+这样可以把部署期覆盖统一收敛到一组 `ZEROCLAW_*` 命名下。
+像 `OPENAI_API_KEY` 这样的提供商特定变量仍然保留给已有部署使用。
+
 ## 提供商目录
 
 | 标准 ID | 别名 | 本地 | 提供商特定环境变量 |

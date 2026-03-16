@@ -72,7 +72,8 @@ pub struct Config {
     pub config_path: PathBuf,
     /// API key for the selected provider. Overridden by `ZEROCLAW_API_KEY` or `API_KEY` env vars.
     pub api_key: Option<String>,
-    /// Base URL override for provider API (e.g. "http://10.0.0.1:11434" for remote Ollama)
+    /// Base URL override for provider API (e.g. "http://10.0.0.1:11434" for remote Ollama).
+    /// Overridden by `ZEROCLAW_API_URL` when set.
     pub api_url: Option<String>,
     /// Custom API path suffix for OpenAI-compatible / custom providers
     /// (e.g. "/v2/generate" instead of the default "/v1/chat/completions").
@@ -125,6 +126,7 @@ pub struct Config {
     pub security: SecurityConfig,
 
     /// Managed cybersecurity service configuration (`[security_ops]`).
+    #[serde(default)]
     pub security_ops: SecurityOpsConfig,
 
     /// Runtime adapter configuration (`[runtime]`). Controls native vs Docker execution.
@@ -5221,6 +5223,22 @@ pub fn parse_extra_headers_env(raw: &str) -> Vec<(String, String)> {
     result
 }
 
+fn parse_bool_env_flag(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_stream_mode_env(raw: &str) -> Option<StreamMode> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" => Some(StreamMode::Off),
+        "partial" => Some(StreamMode::Partial),
+        _ => None,
+    }
+}
+
 fn normalize_wire_api(raw: &str) -> Option<&'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "responses" | "openai-responses" | "open-ai-responses" => Some("responses"),
@@ -6089,6 +6107,88 @@ impl Config {
         if let Ok(model) = std::env::var("ZEROCLAW_MODEL").or_else(|_| std::env::var("MODEL")) {
             if !model.is_empty() {
                 self.default_model = Some(model);
+            }
+        }
+
+        // Provider API base URL: ZEROCLAW_API_URL
+        if let Ok(api_url) = std::env::var("ZEROCLAW_API_URL") {
+            let api_url = api_url.trim();
+            if !api_url.is_empty() {
+                self.api_url = Some(api_url.to_string());
+            }
+        }
+
+        let telegram_bot_token = std::env::var("TELEGRAM_BOT_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let has_existing_telegram = self.channels_config.telegram.is_some();
+        if has_existing_telegram || telegram_bot_token.is_some() {
+            let telegram = self
+                .channels_config
+                .telegram
+                .get_or_insert_with(|| TelegramConfig {
+                    bot_token: String::new(),
+                    allowed_users: Vec::new(),
+                    stream_mode: StreamMode::Off,
+                    draft_update_interval_ms: default_draft_update_interval_ms(),
+                    interrupt_on_new_message: false,
+                    mention_only: false,
+                });
+
+            if let Some(bot_token) = telegram_bot_token {
+                telegram.bot_token = bot_token;
+            }
+
+            if let Ok(raw) = std::env::var("TELEGRAM_ALLOWED_USERS") {
+                telegram.allowed_users = raw
+                    .split(',')
+                    .map(str::trim)
+                    .map(str::to_string)
+                    .filter(|entry| !entry.is_empty())
+                    .collect();
+            }
+
+            if let Ok(raw) = std::env::var("TELEGRAM_MENTION_ONLY") {
+                if let Some(flag) = parse_bool_env_flag(&raw) {
+                    telegram.mention_only = flag;
+                } else {
+                    tracing::warn!(
+                        "Ignoring invalid TELEGRAM_MENTION_ONLY (valid: 1|0|true|false|yes|no|on|off)"
+                    );
+                }
+            }
+
+            if let Ok(raw) = std::env::var("TELEGRAM_INTERRUPT_ON_NEW_MESSAGE") {
+                if let Some(flag) = parse_bool_env_flag(&raw) {
+                    telegram.interrupt_on_new_message = flag;
+                } else {
+                    tracing::warn!(
+                        "Ignoring invalid TELEGRAM_INTERRUPT_ON_NEW_MESSAGE (valid: 1|0|true|false|yes|no|on|off)"
+                    );
+                }
+            }
+
+            if let Ok(raw) = std::env::var("TELEGRAM_STREAM_MODE") {
+                if let Some(mode) = parse_stream_mode_env(&raw) {
+                    telegram.stream_mode = mode;
+                } else {
+                    tracing::warn!("Ignoring invalid TELEGRAM_STREAM_MODE (valid: off|partial)");
+                }
+            }
+
+            if let Ok(raw) = std::env::var("TELEGRAM_DRAFT_UPDATE_INTERVAL_MS") {
+                match raw.trim().parse::<u64>() {
+                    Ok(value) if value > 0 => {
+                        telegram.draft_update_interval_ms = value;
+                    }
+                    Ok(_) => tracing::warn!(
+                        "Ignoring TELEGRAM_DRAFT_UPDATE_INTERVAL_MS={raw:?}: value must be > 0"
+                    ),
+                    Err(_) => tracing::warn!(
+                        "Ignoring TELEGRAM_DRAFT_UPDATE_INTERVAL_MS={raw:?}: not a valid integer"
+                    ),
+                }
             }
         }
 
@@ -7174,6 +7274,7 @@ default_temperature = 0.7
         assert_eq!(parsed.observability.backend, "none");
         assert_eq!(parsed.observability.runtime_trace_mode, "none");
         assert_eq!(parsed.autonomy.level, AutonomyLevel::Supervised);
+        assert!(!parsed.security_ops.enabled);
         assert_eq!(parsed.runtime.kind, "native");
         assert!(!parsed.heartbeat.enabled);
         assert!(parsed.channels_config.cli);
@@ -8616,6 +8717,118 @@ requires_openai_auth = true
         assert_eq!(config.default_model.as_deref(), Some("gpt-4o"));
 
         std::env::remove_var("ZEROCLAW_MODEL");
+    }
+
+    #[test]
+    async fn env_override_api_url() {
+        let _env_guard = env_override_lock().await;
+        let mut config = Config::default();
+
+        std::env::set_var("ZEROCLAW_API_URL", "https://proxy.example.com/v1");
+        config.apply_env_overrides();
+        assert_eq!(
+            config.api_url.as_deref(),
+            Some("https://proxy.example.com/v1")
+        );
+
+        std::env::remove_var("ZEROCLAW_API_URL");
+    }
+
+    #[test]
+    async fn env_override_api_url_takes_precedence_over_named_provider_profile_base_url() {
+        let _env_guard = env_override_lock().await;
+        let mut config = Config {
+            default_provider: Some("railway-openai".to_string()),
+            model_providers: HashMap::from([(
+                "railway-openai".to_string(),
+                ModelProviderConfig {
+                    name: Some("openai".to_string()),
+                    base_url: Some("https://profile.example.com/v1".to_string()),
+                    wire_api: None,
+                    requires_openai_auth: false,
+                    azure_openai_resource: None,
+                    azure_openai_deployment: None,
+                    azure_openai_api_version: None,
+                    api_path: None,
+                },
+            )]),
+            ..Config::default()
+        };
+
+        std::env::set_var("ZEROCLAW_API_URL", "https://env.example.com/v1");
+        config.apply_env_overrides();
+        assert_eq!(config.default_provider.as_deref(), Some("openai"));
+        assert_eq!(
+            config.api_url.as_deref(),
+            Some("https://env.example.com/v1")
+        );
+
+        std::env::remove_var("ZEROCLAW_API_URL");
+    }
+
+    #[test]
+    async fn env_override_telegram_creates_channel_config() {
+        let _env_guard = env_override_lock().await;
+        let mut config = Config::default();
+
+        std::env::set_var("TELEGRAM_BOT_TOKEN", "123456:telegram-token");
+        std::env::set_var("TELEGRAM_ALLOWED_USERS", "123456789, @alice ,*");
+        std::env::set_var("TELEGRAM_MENTION_ONLY", "true");
+        std::env::set_var("TELEGRAM_INTERRUPT_ON_NEW_MESSAGE", "true");
+        std::env::set_var("TELEGRAM_STREAM_MODE", "partial");
+        std::env::set_var("TELEGRAM_DRAFT_UPDATE_INTERVAL_MS", "1500");
+
+        config.apply_env_overrides();
+
+        let telegram = config
+            .channels_config
+            .telegram
+            .as_ref()
+            .expect("telegram config should be created from env");
+        assert_eq!(telegram.bot_token, "123456:telegram-token");
+        assert_eq!(telegram.allowed_users, vec!["123456789", "@alice", "*"]);
+        assert_eq!(telegram.stream_mode, StreamMode::Partial);
+        assert_eq!(telegram.draft_update_interval_ms, 1500);
+        assert!(telegram.interrupt_on_new_message);
+        assert!(telegram.mention_only);
+
+        std::env::remove_var("TELEGRAM_BOT_TOKEN");
+        std::env::remove_var("TELEGRAM_ALLOWED_USERS");
+        std::env::remove_var("TELEGRAM_MENTION_ONLY");
+        std::env::remove_var("TELEGRAM_INTERRUPT_ON_NEW_MESSAGE");
+        std::env::remove_var("TELEGRAM_STREAM_MODE");
+        std::env::remove_var("TELEGRAM_DRAFT_UPDATE_INTERVAL_MS");
+    }
+
+    #[test]
+    async fn env_override_telegram_updates_existing_channel_config() {
+        let _env_guard = env_override_lock().await;
+        let mut config = Config::default();
+        config.channels_config.telegram = Some(TelegramConfig {
+            bot_token: "old-token".to_string(),
+            allowed_users: vec!["old-user".to_string()],
+            stream_mode: StreamMode::Off,
+            draft_update_interval_ms: default_draft_update_interval_ms(),
+            interrupt_on_new_message: false,
+            mention_only: false,
+        });
+
+        std::env::set_var("TELEGRAM_ALLOWED_USERS", "");
+        std::env::set_var("TELEGRAM_MENTION_ONLY", "false");
+
+        config.apply_env_overrides();
+
+        let telegram = config
+            .channels_config
+            .telegram
+            .as_ref()
+            .expect("telegram config should remain present");
+        assert_eq!(telegram.bot_token, "old-token");
+        assert!(telegram.allowed_users.is_empty());
+        assert!(!telegram.mention_only);
+
+        std::env::remove_var("TELEGRAM_ALLOWED_USERS");
+        std::env::remove_var("TELEGRAM_MENTION_ONLY");
     }
 
     #[test]
