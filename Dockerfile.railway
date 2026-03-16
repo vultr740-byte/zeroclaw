@@ -62,6 +62,17 @@ RUN mkdir -p /zeroclaw-data/.zeroclaw /zeroclaw-data/workspace && \
         'port = 42617' \
         'host = "[::]"' \
         'allow_public_bind = true' \
+        '' \
+        '[autonomy]' \
+        'level = "supervised"' \
+        'workspace_only = true' \
+        'allowed_commands = ["git", "npm", "cargo", "ls", "cat", "grep", "find", "echo", "pwd", "wc", "head", "tail", "date"]' \
+        'forbidden_paths = ["/etc", "/root", "/home", "/usr", "/bin", "/sbin", "/lib", "/opt", "/boot", "/dev", "/proc", "/sys", "/var", "/tmp", "~/.ssh", "~/.gnupg", "~/.aws", "~/.config"]' \
+        'max_actions_per_hour = 20' \
+        'max_cost_per_day_cents = 500' \
+        'require_approval_for_medium_risk = true' \
+        'block_high_risk_commands = true' \
+        'auto_approve = ["file_read", "memory_recall", "file_write"]' \
         > /zeroclaw-data/.zeroclaw/config.toml && \
     chown -R 65534:65534 /zeroclaw-data
 
