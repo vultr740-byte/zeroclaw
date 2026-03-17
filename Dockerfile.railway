@@ -66,12 +66,12 @@ RUN mkdir -p /zeroclaw-data/.zeroclaw /zeroclaw-data/workspace && \
         '[autonomy]' \
         'level = "full"' \
         'workspace_only = true' \
-        'allowed_commands = ["ls", "mkdir", "curl"]' \
-        'forbidden_paths = ["/etc", "/root", "/home", "/usr", "/bin", "/sbin", "/lib", "/opt", "/boot", "/dev", "/proc", "/sys", "/var", "/tmp", "~/.ssh", "~/.gnupg", "~/.aws", "~/.config"]' \
+        'allowed_commands = ["*"]' \
+        'forbidden_paths = []' \
         'max_actions_per_hour = 3600' \
-        'max_cost_per_day_cents = 500' \
+        'max_cost_per_day_cents = 1000000' \
         'require_approval_for_medium_risk = false' \
-        'block_high_risk_commands = true' \
+        'block_high_risk_commands = false' \
         'auto_approve = ["file_read", "memory_recall", "file_write", "shell"]' \
         > /zeroclaw-data/.zeroclaw/config.toml && \
     chown -R 65534:65534 /zeroclaw-data
