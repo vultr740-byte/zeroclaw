@@ -1225,6 +1225,73 @@ fn build_curl_command(url: &str) -> Option<String> {
     Some(format!("curl -s '{}'", escaped))
 }
 
+fn shell_single_quote(raw: &str) -> String {
+    format!("'{}'", raw.replace('\'', "'\"'\"'"))
+}
+
+fn build_http_request_curl_command(args: &serde_json::Value) -> Option<String> {
+    let url = args.get("url")?.as_str()?.trim();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return None;
+    }
+    if url.chars().any(char::is_whitespace) {
+        return None;
+    }
+
+    let method = args
+        .get("method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("GET")
+        .trim()
+        .to_uppercase();
+    match method.as_str() {
+        "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS" => {}
+        _ => return None,
+    }
+
+    let mut command = format!("curl -sS -X {method}");
+
+    if let Some(headers) = args.get("headers").and_then(|v| v.as_object()) {
+        for (key, value) in headers {
+            if let Some(value) = value.as_str() {
+                command.push_str(" -H ");
+                command.push_str(&shell_single_quote(&format!("{key}: {value}")));
+            }
+        }
+    }
+
+    if let Some(body) = args.get("body").and_then(|v| v.as_str()) {
+        command.push_str(" --data-raw ");
+        command.push_str(&shell_single_quote(body));
+    }
+
+    command.push(' ');
+    command.push_str(&shell_single_quote(url));
+    Some(command)
+}
+
+pub(crate) fn resolve_tool_execution_fallback(
+    call_name: &str,
+    call_arguments: &serde_json::Value,
+    tools_registry: &[Box<dyn Tool>],
+) -> Option<(String, serde_json::Value)> {
+    if call_name != "http_request" {
+        return None;
+    }
+
+    if find_tool(tools_registry, "http_request").is_some()
+        || find_tool(tools_registry, "shell").is_none()
+    {
+        return None;
+    }
+
+    let command = build_http_request_curl_command(call_arguments)?;
+    Some((
+        "shell".to_string(),
+        serde_json::json!({ "command": command }),
+    ))
+}
+
 fn parse_glm_style_tool_calls(text: &str) -> Vec<(String, serde_json::Value, Option<String>)> {
     let mut calls = Vec::new();
 
@@ -2704,6 +2771,18 @@ pub(crate) async fn run_tool_call_loop(
                         tool_args = args;
                     }
                 }
+            }
+
+            if let Some((fallback_name, fallback_args)) =
+                resolve_tool_execution_fallback(&tool_name, &tool_args, tools_registry)
+            {
+                tracing::info!(
+                    original_tool = %tool_name,
+                    fallback_tool = %fallback_name,
+                    "rewriting unavailable http_request call to shell curl"
+                );
+                tool_name = fallback_name;
+                tool_args = fallback_args;
             }
 
             // ── Approval hook ────────────────────────────────
@@ -6383,6 +6462,70 @@ Let me check the result."#;
         assert_eq!(default_param_for_tool("http_request"), "url");
         assert_eq!(default_param_for_tool("browser_open"), "url");
         assert_eq!(default_param_for_tool("unknown_tool"), "input");
+    }
+
+    struct NamedTool(&'static str);
+
+    #[async_trait::async_trait]
+    impl Tool for NamedTool {
+        fn name(&self) -> &str {
+            self.0
+        }
+
+        fn description(&self) -> &str {
+            "test tool"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(
+            &self,
+            _args: serde_json::Value,
+        ) -> anyhow::Result<crate::tools::ToolResult> {
+            Ok(crate::tools::ToolResult {
+                success: true,
+                output: "ok".to_string(),
+                error: None,
+            })
+        }
+    }
+
+    #[test]
+    fn resolve_tool_execution_fallback_rewrites_http_request_to_shell_curl() {
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(NamedTool("shell"))];
+        let args = serde_json::json!({
+            "url": "https://search.findhub.workers.dev/v1/search",
+            "method": "POST",
+            "headers": {
+                "content-type": "application/json",
+                "authorization": "Bearer test-token"
+            },
+            "body": "{\"query\":\"crime 101\"}"
+        });
+
+        let (tool_name, tool_args) =
+            resolve_tool_execution_fallback("http_request", &args, &tools).unwrap();
+
+        assert_eq!(tool_name, "shell");
+        let command = tool_args["command"].as_str().unwrap();
+        assert!(command.contains("curl -sS -X POST"));
+        assert!(command.contains("content-type: application/json"));
+        assert!(command.contains("authorization: Bearer test-token"));
+        assert!(command.contains("--data-raw"));
+        assert!(command.contains("https://search.findhub.workers.dev/v1/search"));
+    }
+
+    #[test]
+    fn resolve_tool_execution_fallback_keeps_http_request_when_available() {
+        let tools: Vec<Box<dyn Tool>> = vec![
+            Box::new(NamedTool("shell")),
+            Box::new(NamedTool("http_request")),
+        ];
+        let args = serde_json::json!({"url": "https://example.com"});
+
+        assert!(resolve_tool_execution_fallback("http_request", &args, &tools).is_none());
     }
 
     #[test]

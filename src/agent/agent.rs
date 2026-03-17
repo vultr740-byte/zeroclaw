@@ -401,9 +401,15 @@ impl Agent {
 
     async fn execute_tool_call(&self, call: &ParsedToolCall) -> ToolExecutionResult {
         let start = Instant::now();
+        let (exec_name, exec_args) = crate::agent::loop_::resolve_tool_execution_fallback(
+            &call.name,
+            &call.arguments,
+            &self.tools,
+        )
+        .unwrap_or_else(|| (call.name.clone(), call.arguments.clone()));
 
-        let result = if let Some(tool) = self.tools.iter().find(|t| t.name() == call.name) {
-            match tool.execute(call.arguments.clone()).await {
+        let result = if let Some(tool) = self.tools.iter().find(|t| t.name() == exec_name) {
+            match tool.execute(exec_args).await {
                 Ok(r) => {
                     self.observer.record_event(&ObserverEvent::ToolCall {
                         tool: call.name.clone(),
