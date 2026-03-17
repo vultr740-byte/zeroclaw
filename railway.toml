@@ -1,3 +1,6 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.railway"
+
+[deploy]
+requiredMountPath = "/zeroclaw-data/workspace"
