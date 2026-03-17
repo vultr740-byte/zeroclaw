@@ -83,7 +83,7 @@ FROM debian:trixie-slim@sha256:f6e2cfac5cf956ea044b4bd75e6397b4372ad88fe00908045
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
-    gosu \
+    util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /zeroclaw-data /zeroclaw-data
@@ -133,7 +133,7 @@ RUN printf '%s\n' \
     'echo "[railway-entrypoint] uid=$(id -u) gid=$(id -g) pwd=$(pwd)" >&2' \
     'echo "[railway-entrypoint] PORT=${PORT-} ZEROCLAW_GATEWAY_PORT=${ZEROCLAW_GATEWAY_PORT-} ZEROCLAW_GATEWAY_HOST=${ZEROCLAW_GATEWAY_HOST-} HOME=${HOME-}" >&2' \
     'ls -l /usr/local/bin/zeroclaw >&2 || true' \
-    'exec gosu 65534:65534 /usr/local/bin/zeroclaw "$@"' \
+    'exec setpriv --reuid=65534 --regid=65534 --clear-groups /usr/local/bin/zeroclaw "$@"' \
     > /usr/local/bin/railway-entrypoint.sh \
     && chmod +x /usr/local/bin/railway-entrypoint.sh
 
