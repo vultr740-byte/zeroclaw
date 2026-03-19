@@ -73,6 +73,10 @@ RUN mkdir -p /zeroclaw-data/.zeroclaw /zeroclaw-data/workspace && \
         'require_approval_for_medium_risk = false' \
         'block_high_risk_commands = false' \
         'auto_approve = ["file_read", "memory_recall", "file_write", "shell"]' \
+        '' \
+        '[http_request]' \
+        'enabled = true' \
+        'allowed_domains = ["*"]' \
         > /zeroclaw-data/.zeroclaw/config.toml && \
     chown -R 65534:65534 /zeroclaw-data
 
